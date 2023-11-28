@@ -1,0 +1,934 @@
+using UnityEngine;
+using UnityEngine.SceneManagement;
+public class GameManager : MonoBehaviour
+{
+    public Player player;
+    public Ufo ufo;
+    public float respawnTime = 3.0f;
+    public int lives = 3;
+
+    public int ufolives = 3;
+    public int score = 0;
+
+    public ParticleSystem explosion;
+    private void Update()
+    {
+
+    }
+    public void AsteroidDestroyed(Asteroid asteroid)
+    {
+        explosion.transform.position = asteroid.transform.position;
+        explosion.Play();
+        //scoring system
+        if (asteroid.size < 0.2){
+            score += 100;
+        } else if (asteroid.size < 0.3){
+            score += 50;
+        } else {
+            score += 25;
+        }
+    }
+
+    public void UfoDestroyed(Ufo ufo)
+    {
+        explosion.transform.position = ufo.transform.position;
+        explosion.Play();
+        //scoring system
+        score += 500;
+        ufolives --;
+        lives += 1;
+        if (ufolives < 1 )
+        {
+        } else {
+            Invoke(nameof(ufoRespawn),10f);
+        }
+    }
+
+    public void HealthGain(Health health)
+    {
+        // gaining a health when bulllet collides with little meteors
+        explosion.transform.position = health.transform.position;
+        explosion.Play();
+        lives += 1;
+    }
+
+    public void Death()
+    {
+        // player's death
+        explosion.transform.position = player.transform.position;
+        explosion.Play();
+        lives --;
+        if (lives < 1 )
+        {
+            // if player has more than 1 live respawn in 5s
+            Invoke(nameof(gameOver),5.0f);
+        } else {
+            Invoke(nameof(Respawn),respawnTime);
+        }
+    }
+
+    private void Respawn()
+    {   
+        player.transform.position = Vector3.zero;
+        // changing the layer of the player to respawn which is undestructible and change it back in 3s
+        player.gameObject.layer = LayerMask.NameToLayer("Respawn");
+        player.gameObject.SetActive(true);
+        FindObjectOfType<ufoAI>().StartShooting();
+        Invoke(nameof(AfterRespawn), 3.0f);
+    }
+
+    private void ufoRespawn()
+    {   
+        Vector3 spawnDirection = Random.insideUnitCircle.normalized * 9.0f;
+        Vector3 spawnPoint = spawnDirection;
+        ufo.transform.position = spawnPoint;
+        ufo.gameObject.SetActive(true);
+
+    }
+
+
+    private void AfterRespawn()
+    {
+        player.gameObject.layer = LayerMask.NameToLayer("Player");
+    }
+
+    private void gameOver()
+    {
+        FindObjectOfType<PauseMenu>().Pause();
+    }
+
+}
+
+
+using UnityEngine;
+public class Player : MonoBehaviour
+{
+    public static Player Instance {get;private set;}
+    public Bullet bulletPrefab;
+    private new Rigidbody2D rigidbody;
+    public float thrust = 3.0f;
+    public float turn = 1.0f;
+    public int livesagainstufo = 3;
+    private bool thrusting;
+    private bool backwards;
+    private float turnDirection;
+
+    private void Awake()
+    {
+        rigidbody = GetComponent<Rigidbody2D>();
+    }
+
+    private void Update()
+    {
+        // player movements
+        thrusting = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow);
+        backwards = Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow);
+
+        if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow)) {
+            turnDirection = 1f;
+        } else if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow)) {
+            turnDirection = -1f;
+        } else {
+            turnDirection = 0f;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Space) || Input.GetMouseButtonDown(0)){
+            Shoot();
+            FindObjectOfType<AudioManager>().Play("Shooting");
+        }
+        if(livesagainstufo == 0){
+            toDeath();
+        }
+    }
+
+    private void FixedUpdate()
+    {
+        if (thrusting) {
+            rigidbody.AddForce(transform.up * thrust);
+        }
+        if (turnDirection != 0f) {
+            rigidbody.AddTorque(turn * turnDirection);
+        }
+        if (backwards){
+            rigidbody.AddForce(transform.up * (-thrust));
+        }
+    }
+
+    private void Shoot()
+    {
+        // creating bullets when player presses the space button or left click
+        Bullet bullet = Instantiate(bulletPrefab, transform.position,transform.rotation);
+        bullet.Project(transform.up);
+    }
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+
+        if(collision.gameObject.tag == "ufoBullet"){
+            livesagainstufo = livesagainstufo -1;
+        }
+        // checking if player collided with an asteroid
+        if (collision.gameObject.tag == "Asteroid")
+        {
+            toDeath();
+        }
+    }
+
+    private void toDeath(){
+
+        livesagainstufo = 3;
+        rigidbody.velocity = Vector3.zero;
+        rigidbody.angularVelocity = 0.0f;
+
+        gameObject.SetActive(false);
+
+        FindObjectOfType<GameManager>().Death();
+        FindObjectOfType<AudioManager>().Play("PlayerDeath");
+        FindObjectOfType<ufoAI>().StopShooting();
+
+    }
+
+    public Vector3 GetPosition() {
+        return transform.position;
+    }
+
+}
+
+using UnityEngine;
+
+public class Asteroid : MonoBehaviour
+{
+    public Sprite[] sprites;
+
+    public Player player;
+    public Level now;
+    public float size = 1.0f;
+    public float minSize = 0.1f;
+    public float maxSize = 0.4f;
+    public float speed = 6.0f;
+    public float Lifetime = 30.0f;
+    private SpriteRenderer spriteRenderer;
+    private new Rigidbody2D rigidbody;
+
+    private void Awake() 
+    {
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        rigidbody = GetComponent<Rigidbody2D>();
+    }
+
+    void Start()
+    {
+        spriteRenderer.sprite = sprites[Random.Range(0,sprites.Length)];
+        // gives asteroid an angle so that every asteroid can look different
+        transform.eulerAngles = new Vector3(0.0f,0.0f,Random.value *360.0f);
+        transform.localScale = Vector3.one * size;
+        rigidbody.mass = size;
+    }
+
+
+    public void SetTrajectory(Vector2 direction)
+    {
+        rigidbody.AddForce(direction * speed);
+
+        Destroy(gameObject, Lifetime);
+    }
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        // check if asteroid collides with bullet
+        if(collision.gameObject.tag == "Bullet")
+        {
+            // if the half of the asteroid is bigger than minimum size split it
+            if ((size * 0.5f) > minSize)
+            {
+                Split();
+                Split();
+            }
+            FindObjectOfType<GameManager>().AsteroidDestroyed(this);
+            FindObjectOfType<AudioManager>().Play("AsteroidDeath");
+            if(gameObject.tag == "Asteroid"){
+                Destroy(gameObject);
+            }
+            else if(gameObject.tag == "AsteroidAI" ){
+                gameObject.SetActive(false);
+            }
+        }
+    }
+    private void Split()
+
+    {
+        Vector2 position = this.transform.position;
+        position += Random.insideUnitCircle * 0.5f;
+
+        Asteroid half = Instantiate(this, position, this.transform.rotation);
+        half.size = size *0.5f;
+        half.SetTrajectory(Random.insideUnitCircle.normalized * 2);
+    }
+
+    //every level the speed of the meteor increased by 0.5
+    public void Increasespeed()
+    {
+        speed += 0.5f;
+    }
+}
+
+
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class Ufo : MonoBehaviour
+{
+    // Start is called before the first frame update
+
+    private new Rigidbody2D rigidbody;
+
+    public float size = 1.0f;
+
+    public float Health = 5.0f;
+    private void Awake()
+    {
+        rigidbody = GetComponent<Rigidbody2D>();
+    }
+
+    void Start()
+    {
+        rigidbody.mass = size;
+    }
+
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        // check if asteroid collides with bullet
+        if(collision.gameObject.tag == "Bullet")
+        {
+
+            Health = Health -1;
+            if(Health == 0){
+                rigidbody.velocity = Vector3.zero;
+                rigidbody.angularVelocity = 0.0f;
+                Health = 10f;
+                gameObject.SetActive(false);
+                FindObjectOfType<GameManager>().UfoDestroyed(this);
+                FindObjectOfType<AudioManager>().Play("AsteroidDeath");
+            }
+        }
+    }
+
+    public void IncreaseHealth()
+    {
+        Health += 3.0f;
+    }
+}
+
+ 
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+//using CodeMonkey.Utils;
+
+public class AsteroidAI : MonoBehaviour {
+     private enum State {
+        Roaming,
+        ChaseTarget,
+    }
+
+    //private Asteroid asteroid;
+    private Vector3 startingPosition;
+    private Vector3 roamPosition;
+    private float nextShotTime;
+    public GameObject ufoBullet;
+    public float timeBetweenShots;
+    public float speed;
+    public Transform target;
+    public float minimumDistance;
+    private State state;
+
+    private void Awake() {
+
+        state = State.Roaming;
+    }
+
+    private void Start() {
+        startingPosition = transform.position;
+        roamPosition = GetRoamingPosition();
+    }
+
+    private void Update() {
+        switch (state) {
+        default:
+        case State.Roaming:
+
+            transform.position = Vector2.MoveTowards(transform.position, roamPosition, speed * Time.deltaTime);
+
+            float reachedPositionDistance = 3f;
+            if (Vector2.Distance(transform.position, roamPosition) < reachedPositionDistance) {
+                // Reached Roam Position
+                roamPosition = GetRoamingPosition();
+            }
+            FindTarget();
+            break;
+
+        case State.ChaseTarget:
+
+            transform.position = Vector2.MoveTowards(transform.position, target.position, speed * Time.deltaTime);
+            
+            float stopChaseDistance = 5f;
+            if (Vector3.Distance(transform.position, target.position) > stopChaseDistance) {
+                // Too far, stop chasing
+                state = State.Roaming;
+            }
+            break;
+        }
+    }
+
+    private void Shooting(){
+        Instantiate(ufoBullet,transform.position, Quaternion.identity);
+    }
+
+    private void FindTarget() {
+
+        float targetRange = 5f;
+        if (Vector2.Distance(transform.position, target.position) < targetRange) {
+            // Player within target range
+            state = State.ChaseTarget;
+        }
+    }
+
+    private Vector3 GetRoamingPosition(){
+        //Vector3 nextDirection = (UnityEngine.Random.Range(-1f,1f), UnityEngine.Random.Range(-1f,1f)).normalized;
+        Vector3 nextDirection = Random.insideUnitCircle.normalized;
+        Vector3 nextPoint = nextDirection * Random.Range(13f,8.0f);
+        return nextPoint;
+    }
+
+}
+
+ using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+//using CodeMonkey.Utils;
+
+public class ufoAI : MonoBehaviour {
+
+    private enum State {
+        Roaming,
+        ChaseTarget,
+        ShootingTarget,
+        //GoingBackToStart,
+    }
+    private Asteroid asteroid;
+    private Vector3 startingPosition;
+    private Vector3 roamPosition;
+    private float nextShotTime;
+    public GameObject ufoBullet;
+    public float timeBetweenShots;
+    public float speed;
+    public Transform target;
+    public float minimumDistance;
+    private State state;
+    public bool shooting = true;
+
+    private void Awake() {
+
+        state = State.Roaming;
+    }
+
+    private void Start() {
+        startingPosition = transform.position;
+        roamPosition = GetRoamingPosition();
+    }
+
+    private void Update() {
+        switch (state) {
+        default:
+        case State.Roaming:
+
+            transform.position = Vector2.MoveTowards(transform.position, roamPosition, speed * Time.deltaTime);
+
+            float reachedPositionDistance = 3f;
+            if (Vector2.Distance(transform.position, roamPosition) < reachedPositionDistance) {
+                // Reached Roam Position
+                roamPosition = GetRoamingPosition();
+            }
+            FindTarget();
+            break;
+
+        case State.ChaseTarget:
+
+            transform.position = Vector2.MoveTowards(transform.position, target.position, speed * Time.deltaTime);
+
+            float attackRange = 3.0f;
+            if (Vector3.Distance(transform.position, target.position) < attackRange) {
+                // attack
+                state = State.ShootingTarget;
+            }
+    
+            float stopChaseDistance = 5f;
+            if (Vector3.Distance(transform.position, target.position) > stopChaseDistance) {
+                // Too far, stop chasing
+                state = State.Roaming;
+            }
+            break;
+            
+        case State.ShootingTarget:
+
+            if(Time.time > nextShotTime && shooting){
+                Instantiate(ufoBullet,transform.position,Quaternion.identity);
+                FindObjectOfType<AudioManager>().Play("Shooting");
+                nextShotTime = Time.time + timeBetweenShots;
+            }
+
+            float goBack = 2.0f;
+            if (Vector3.Distance(transform.position, target.position) < goBack) {
+                // Retreat
+                transform.position = Vector2.MoveTowards(transform.position, target.position, (-speed*2) * Time.deltaTime);
+            }
+
+            if (Vector3.Distance(transform.position, target.position) > 3.0f) {
+                state = State.ChaseTarget;
+            }
+            break;
+        }
+    }
+
+    private void FindTarget() {
+
+        float targetRange = 5f;
+        if (Vector2.Distance(transform.position, target.position) < targetRange) {
+            // Player within target range
+            state = State.ChaseTarget;
+        }
+    }
+
+    private Vector3 GetRoamingPosition(){
+        Vector3 nextDirection = Random.insideUnitCircle.normalized;
+        Vector3 nextPoint = nextDirection * Random.Range(14f,9.0f);
+        return nextPoint;
+    }
+
+    public void StopShooting()
+    {
+        shooting = false;
+    }
+    public void StartShooting()
+    {
+        shooting = true;
+    }
+
+}
+
+using UnityEngine;
+
+public class Bullet : MonoBehaviour
+{
+    private new Rigidbody2D rigidbody;
+    public float speed = 500.0f;
+    public float maxLifetime = 4.0f;
+
+    private void Awake()
+    {
+        rigidbody = GetComponent<Rigidbody2D>();
+    }
+
+    public void Project(Vector2 direction)
+    {
+        rigidbody.AddForce(direction * speed);
+
+        Destroy(gameObject, maxLifetime);
+    }
+
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        Destroy(gameObject);
+        
+    }
+
+}
+
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class ufoBullet : MonoBehaviour
+{
+
+    private new Rigidbody2D rigidbody;
+    public float speed = 500.0f;
+    public float maxLifetime = 4.0f;
+    Vector3 targetPosition;
+
+    private void Awake()
+    {
+        rigidbody = GetComponent<Rigidbody2D>();
+    }
+
+    private void Start(){
+        targetPosition = FindObjectOfType<Player>().transform.position;
+    }
+
+    private void Update(){
+        if(targetPosition != Vector3.zero){
+            transform.position = Vector2.MoveTowards(transform.position, targetPosition, speed * Time.deltaTime);
+            }
+
+        Destroy(gameObject, 3.0f);
+
+        if(transform.position == targetPosition){
+            Destroy(gameObject);
+        }
+        //rigidbody.AddForce(targetPosition*speed);
+        //Destroy(gameObject, maxLifetime);
+
+    }
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        Destroy(gameObject);
+    }
+
+}
+using UnityEngine;
+
+public class Spawner : MonoBehaviour
+{
+    // Start is called before the first frame update
+    public Asteroid asteroidPrefab;
+    //public Player playerPrefab;
+    public Health healthSprite;
+    public float trajectoryVariance = 15.0f;
+    public float Rate = 4.0f;
+    public float meteorRate = 10.0f;
+    public int Asteroidamount = 1;
+    public int Meteoramount = 1;
+    public float Distance = 9.0f;
+
+    private void Start()
+    {
+        // calling the functions every 2s
+        InvokeRepeating(nameof(Asteroidspawn),Rate,Rate);
+        InvokeRepeating(nameof(Healthspawn),meteorRate,meteorRate);
+    }
+
+    private void Asteroidspawn()
+    {
+        for (int i = 0; i < Asteroidamount; i++)
+        {
+            // creating a random direction
+            Vector3 spawnDirection = Random.insideUnitCircle.normalized * Distance;
+            Vector3 spawnPoint = transform.position + spawnDirection;
+            
+            // spawning the asteroid in 15 and -15 degrees
+            float variance = Random.Range(-trajectoryVariance,trajectoryVariance);
+            Quaternion rotation = Quaternion.AngleAxis(variance, Vector3.forward);
+            
+            Asteroid asteroid = Instantiate(asteroidPrefab,spawnPoint,rotation);
+            asteroid.size = Random.Range(asteroid.minSize,asteroid.maxSize);
+            asteroid.SetTrajectory(rotation * -spawnDirection);
+        }
+    }
+
+    private void Healthspawn()
+    {
+        for (int i = 0; i < Meteoramount; i++)
+        {
+            Vector3 spawnDirection = Random.insideUnitCircle.normalized * Distance;
+            Vector3 spawnPoint = transform.position + spawnDirection;
+            
+            float variance = Random.Range(-trajectoryVariance,trajectoryVariance);
+            Quaternion rotation = Quaternion.AngleAxis(variance, Vector3.forward);
+            
+            Health health = Instantiate(healthSprite,spawnPoint,rotation);
+            health.SetTrajectory(rotation * -spawnDirection);
+        }
+    }
+
+    // every 5 levels the amount of asteroid spawned in 2s is increased 1 more.
+    public void Increaseamount()
+    {
+        Asteroidamount += 1;
+        Meteoramount += 1;
+    }
+}
+
+using UnityEngine;
+using UnityEngine.UI;
+
+public class Score : MonoBehaviour
+{
+    public  GameManager game;
+
+    public Text scoreText;
+
+
+    // Update is called once per frame
+    void Update()
+    {
+        scoreText.text = game.score.ToString();
+    }
+}
+
+using UnityEngine;
+using UnityEngine.UI;
+
+public class Lives : MonoBehaviour
+{
+    public  GameManager game;
+
+    public Text livesText;
+
+    //public Text livesText;
+    public GameObject heartimage1;
+    public GameObject heartimage2;
+    public GameObject heartimage3;
+
+    // Update is called once per frame
+    void Update()
+    {  
+        if(game.lives > 3){
+            livesText.text = ("+ " + (game.lives -3).ToString());
+        }else{livesText.text = ("");}
+        if(game.lives > 2) {
+            heartimage3.SetActive(true);
+        }
+        if(game.lives == 2){
+            heartimage3.SetActive(false);
+            heartimage2.SetActive(true);
+            heartimage1.SetActive(true);
+        }
+        if(game.lives == 1){
+            heartimage2.SetActive(false);
+            heartimage1.SetActive(true);
+        }
+        if(game.lives < 1){
+            heartimage1.SetActive(false);
+        }
+    }
+}
+
+using UnityEngine;
+using UnityEngine.UI;
+
+public class Level : MonoBehaviour
+{
+    public  GameManager game;
+    public Asteroid asteroid;
+    public Spawner spawner;
+    public int level = 1;
+
+    public int is5 = 1;
+    public int score = 1000;
+
+    public Text levelText;
+
+    // Update is called once per frame
+    void Update()
+    {  
+        if (game.score >= score*1.5) 
+        {
+            score = game.score;
+            level += 1;
+            is5 += 1;
+            FindObjectOfType<Asteroid>().Increasespeed();
+        }
+        // every 5 level call the increaseamount function in Spawner class adn IncreaseHealth function in Ufo class
+        if (is5 == 5 )
+        {
+            is5 = 0;
+            FindObjectOfType<Spawner>().Increaseamount();
+            FindObjectOfType<Ufo>().IncreaseHealth();
+        }
+        levelText.text = ("Level: " + level.ToString());
+    }
+
+}
+
+using UnityEngine;
+
+public class Health : MonoBehaviour
+{
+    private SpriteRenderer spriteRenderer;
+    private new Rigidbody2D rigidbody;
+    
+    public float speed = 50.0f;
+    public float maxLifetime = 30.0f;
+
+    private void Awake() 
+    {
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        rigidbody = GetComponent<Rigidbody2D>();
+    }
+
+    public void SetTrajectory(Vector2 direction)
+    {
+        rigidbody.AddForce(direction * speed);
+
+        Destroy(gameObject, maxLifetime);
+    }
+
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        // if little meteros collide with a bullet player gains a live
+        if(collision.gameObject.tag == "Bullet" )
+        {
+            FindObjectOfType<GameManager>().HealthGain(this);
+            FindObjectOfType<AudioManager>().Play("HealthGain");
+            Destroy(gameObject);
+        }
+    }
+}
+
+using UnityEngine;
+using UnityEngine.UI;
+
+public class gameOver : MonoBehaviour
+{
+    public  GameManager game;
+
+    public Text gameOverText;
+
+    void Update()
+    {  
+        if (game.lives == 0)
+        {
+            gameOverText.text = "Game Over";
+        }
+    }
+}
+
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+public class PauseMenu : MonoBehaviour
+{
+
+    public static bool GameIsPaused = false;
+    public GameObject pauseMenuUI;
+    void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            if(GameIsPaused)
+            {
+                Resume();
+            } else
+            {
+                Pause();
+            }
+        }
+    }
+    public void Resume()
+    {
+        pauseMenuUI.SetActive(false);
+        Time.timeScale = 1f;
+        GameIsPaused = false;
+    }
+    public void Pause()
+    {
+        pauseMenuUI.SetActive(true);
+        Time.timeScale = 0f;
+        GameIsPaused = true;
+        
+    }
+    public void LoadMenu()
+    {
+        Time.timeScale = 1f;
+        SceneManager.LoadScene("Menu");
+    }
+    public void QuitGame()
+    {
+        Application.Quit();
+    }
+}
+
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+public class MainMenu : MonoBehaviour
+{
+
+    public void Update()
+    {
+        if (Input.GetKey(KeyCode.Space))
+        {
+            SceneManager.LoadScene("Game");
+        }
+    }
+    public void PlayGame ()
+    {
+        SceneManager.LoadScene("Game");
+    }
+
+    public void QuitGame()
+    {
+        Application.Quit();
+    }
+}
+
+using UnityEngine.Audio;
+using UnityEngine;
+
+[System.Serializable]
+public class Sound
+{
+    // Start is called before the first frame update
+    public string name;
+    public AudioClip clip;
+
+    [Range(0f,1f)]
+    public float volume;
+    [Range(.1f,3f)]
+    public float pitch;
+    
+    [HideInInspector]
+    public AudioSource source;
+}
+
+using UnityEngine;
+
+public class camerafollow : MonoBehaviour
+{
+    public Transform target;
+
+    public float smoothSpeed = 0.125f;
+
+    public Vector3 offset;
+
+    void LateUpdate ()
+    {
+        transform.position = target.position + offset;
+    }
+
+}
+
+using UnityEngine.Audio;
+using System;
+using UnityEngine;
+
+public class AudioManager : MonoBehaviour
+{
+    // Start is called before the first frame update
+    public Sound[] sounds;
+    void Awake()
+    {
+        foreach (Sound s in sounds){
+            s.source = gameObject.AddComponent<AudioSource>();
+            s.source.clip= s.clip;
+
+            s.source.volume = s.volume;
+            s.source.pitch = s.pitch;
+        }
+    }   
+
+    // Update is called once per frame
+    public void Play(string name)
+    {
+        Sound s = Array.Find(sounds, sound => sound.name == name);
+        if (s == null){
+            return;
+        }
+        s.source.Play();
+
+    }
+}
+
